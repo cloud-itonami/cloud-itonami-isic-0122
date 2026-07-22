@@ -38,10 +38,11 @@ needed.
     :notes "healthy yield"}
    ```
 
-2. **Actor Processes** (`operation/run-operation store request context`)
+2. **Actor Processes** (the compiled `langgraph-clj` `StateGraph` built by
+   `orchardops.operation/build`, run via `langgraph.graph/run*`)
    - `:advise` — `OrchardOpsAdvisor` proposes an action (`orchardops.advisor`)
    - `:govern` — `OrchardOperationsGovernor` checks hard invariants and escalation gates (`orchardops.governor`)
-   - phase gate — rollout-phase constraints applied on top of the Governor's verdict (`orchardops.phase`)
+   - `:decide` — rollout-phase constraints applied on top of the Governor's verdict (`orchardops.phase`)
 
 3. **Outcomes** (`:disposition` on the return value)
    - **`:commit`** — operation logged, robot proceeds (`:record` is present)
@@ -62,25 +63,30 @@ needed.
 
 ### Resuming Escalated Operations
 
-`orchardops.operation` is currently a synchronous stub (see its docstring):
-one call to `(operation/run-operation store request context)` runs the full
-`advise -> govern -> phase-gate` flow and returns immediately with a
-`:disposition` of `:commit`, `:escalate`, or `:hold`. There is **no
-persisted pause/resume yet** — that requires the deferred `langgraph-clj`
-StateGraph integration (`interrupt-before` + checkpoint-based resume,
-mirroring `cloud-itonami-isic-0121`). Until then, an `:escalate`
-disposition means: **do not commit** — the caller (production
-integration layer) is responsible for holding the proposal for human
-review and re-submitting a follow-up operation once approved.
+`orchardops.operation/build` compiles a REAL `langgraph-clj` `StateGraph`
+with `interrupt-before #{:request-approval}`: a call to
+`(langgraph.graph/run* actor {:request .. :context ..} {:thread-id
+tid})` genuinely pauses (checkpointed) at `:request-approval` whenever
+the phase gate or Governor escalates. A human operator resumes it with
+
+```clojure
+(langgraph.graph/run* actor {:approval {:status :approved :by "operator-id"}}
+                       {:thread-id tid :resume? true})
+```
+
+(`:status :rejected` routes to `:hold` instead). Nothing is committed to
+the store or the ledger until this resume call runs — the ledger stays
+empty across the interrupt (see `test/orchardops/operation_graph_test.cljc`
+for the falsifiable proof).
 
 ## Audit & Transparency
 
-Every operation run returns an `:audit` vector containing an
-advisor-proposal trace and a disposition fact (`:committed`,
-`:governor-hold`, or `:approval-requested`). Production integration is
-responsible for appending these facts to an append-only ledger (the
-reference implementation does not include a ledger-writer — that's a
-backend-integration concern, same seam point as the `Store`).
+Every graph run appends an `:audit` vector containing an advisor-proposal
+trace and a disposition fact (`:committed`, `:governor-hold`, or
+`:approval-requested`/`:approval-granted`/`:approval-rejected`) to
+`orchardops.store`'s append-only ledger (`store/ledger` /
+`store/append-ledger!`), written ONLY from the compiled graph's real
+`:commit`/`:hold` nodes.
 
 - Every proposal produces a trace, regardless of outcome
 - Every hold cites the specific Governor rule(s) violated (`:violations`)
@@ -92,12 +98,14 @@ The actor provides a standard protocol (`orchardops.store/Store`) for backend
 integration:
 
 - **Orchard/block lookup** — `(store/registered-orchard store orchard-id)`
+- **Audit ledger** — `(store/ledger store)` / `(store/append-ledger! store fact)`
 
 Implementations include in-memory `MemStore` (testing, `orchardops.store`),
 and future Datomic/kotoba-server backends (the same seam point all
-cloud-itonami actors use). Record-commit and ledger-append are integration
-responsibilities on top of `operation/run-operation`'s return value, not
-part of the `Store` protocol itself.
+cloud-itonami actors use). `orchardops.operation/build`'s compiled graph
+appends every committed/held/approval-rejected decision fact via
+`append-ledger!` from its `:commit`/`:hold` nodes -- callers never need to
+append facts themselves.
 
 ## Safety Guarantees
 

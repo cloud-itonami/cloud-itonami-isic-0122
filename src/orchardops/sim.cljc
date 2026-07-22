@@ -1,46 +1,110 @@
 (ns orchardops.sim
-  "Simple simulation/demo runner for the Orchard Operations Coordinator
-  actor. Used to validate that the actor flow compiles and basic proposal
-  flow works. Mirrors `vineyardops.sim` (cloud-itonami-isic-0121)."
-  (:require [orchardops.operation :as operation]
+  "Demo driver -- `clojure -M:run` / `clojure -M:dev:run`. Drives the REAL
+  compiled `langgraph-clj` `StateGraph` (`orchardops.operation/build`)
+  end-to-end through a phase-1 auto-commit, a phase-0-forced escalation
+  (operator approves), an always-escalating crop-health-concern flag
+  (operator rejects), and the HARD governor-block scenarios (out-of-
+  allowlist op, unregistered orchard block), then prints the resulting
+  audit ledger. Mirrors `pastaops.sim`/`forestrysupport.sim`
+  (cloud-itonami-isic-1074/0240).
+
+  FIX: this replaces a demo that called `(actor request context)` as a
+  bare function -- `orchardops.operation/build` previously returned a
+  plain closure (a stub), never a compiled `langgraph.graph` graph, so
+  there was no `interrupt-before`/resume to demonstrate at all."
+  (:require [langgraph.graph :as g]
+            [orchardops.operation :as operation]
             [orchardops.store :as store]))
 
+(defn- exec-op [actor tid request context]
+  (g/run* actor {:request request :context context} {:thread-id tid}))
+
+(defn- approve! [actor tid by]
+  (g/run* actor {:approval {:status :approved :by by}}
+          {:thread-id tid :resume? true}))
+
+(defn- reject! [actor tid by]
+  (g/run* actor {:approval {:status :rejected :by by}}
+          {:thread-id tid :resume? true}))
+
+(defn scenario [title]
+  (println "\n" "=" "=" "=" "=" "=" "=" "=" "=" "=" "=")
+  (println (str "Scenario: " title))
+  (println "=" "=" "=" "=" "=" "=" "=" "=" "=" "="))
+
 (defn demo
-  "Run a simple demo scenario: register an orchard block, propose an
-  orchard-record log, and check the disposition flow."
+  "Run the compiled StateGraph through a phase-1 clean auto-commit, a
+  phase-0-forced escalation (approved), an always-escalating crop-health
+  concern (rejected), and the HARD-block scenarios (out-of-allowlist op,
+  unregistered orchard); print each result and the final audit ledger."
   []
-  (let [;; Create store with a registered orchard block
-        st (store/mem-store
-            {:initial-orchards
-             {"orchard-001"
-              {:id "orchard-001"
-               :name "Test Orchard Block"
-               :fruit-class "mango"}}})
+  (println "=== Orchard Operations Coordinator Demo ===")
 
-        ;; Build actor
-        actor (operation/build st)
+  (scenario "Phase-1: clean :log-orchard-record auto-commits (not an always-escalate op)")
+  (let [s (store/mem-store
+           {:initial-orchards {"orchard-001" {:id "orchard-001" :name "Test Orchard Block"
+                                               :fruit-class "mango"}}})
+        actor (operation/build s)
+        result (exec-op actor "t1"
+                        {:op :log-orchard-record :orchard-id "orchard-001"
+                         :record-type "harvest" :count 500 :notes "healthy yield"}
+                        {:actor-id "orchard-ops-01" :role :orchard-operator :phase :phase-1})]
+    (println "Disposition:" (:disposition (:state result)))
+    (println "Ledger:" (store/ledger s)))
 
-        ;; Create a request to log an orchard record
-        request {:op :log-orchard-record
-                 :orchard-id "orchard-001"
-                 :record-type "harvest"
-                 :count 500
-                 :notes "healthy yield"}
+  (scenario "Phase-0: would-be commit is forced to escalate (simulation-only); operator APPROVES")
+  (let [s (store/mem-store
+           {:initial-orchards {"orchard-002" {:id "orchard-002" :name "Test Orchard Block 2"
+                                               :fruit-class "banana"}}})
+        actor (operation/build s)
+        held (exec-op actor "t2"
+                      {:op :log-orchard-record :orchard-id "orchard-002"
+                       :record-type "planting" :count 200}
+                      {:actor-id "orchard-ops-01" :role :orchard-operator :phase :phase-0})]
+    (println "Status:" (:status held) "Frontier:" (:frontier held))
+    (println "Ledger while interrupted (must be empty -- not yet committed):" (store/ledger s))
+    (println "-- orchard operator approves --")
+    (let [approved (approve! actor "t2" "grower-01")]
+      (println "Disposition:" (:disposition (:state approved)))
+      (println "Ledger:" (store/ledger s))))
 
-        ;; Context with phase 0 (simulation)
-        context {:actor-id "orchard-ops-01"
-                 :role :orchard-operator
-                 :phase :phase-0}]
+  (scenario "Always-escalating: flag-crop-health-concern; operator REJECTS")
+  (let [s (store/mem-store
+           {:initial-orchards {"orchard-003" {:id "orchard-003" :name "Test Orchard Block 3"
+                                               :fruit-class "avocado"}}})
+        actor (operation/build s)
+        _held (exec-op actor "t3"
+                       {:op :flag-crop-health-concern :orchard-id "orchard-003"
+                        :concern "suspected fungal disease"}
+                       {:actor-id "orchard-ops-01" :role :orchard-operator :phase :phase-3})
+        rejected (reject! actor "t3" "agronomist-01")]
+    (println "Disposition:" (:disposition (:state rejected)))
+    (println "Ledger:" (store/ledger s)))
 
-    (println "=== Orchard Operations Coordinator Demo ===")
-    (println "Demo orchard block: orchard-001")
-    (println "Request: log-orchard-record")
-    (println "Phase: phase-0 (simulation)")
-    (println "Expected: escalate (phase-0 forces human review of all commits)")
-    (println)
-    (let [result (actor request context)]
-      (println "Result disposition:" (:disposition result))
-      result)))
+  (scenario "HARD-block: out-of-allowlist op (direct field-equipment operation)")
+  (let [s (store/mem-store
+           {:initial-orchards {"orchard-004" {:id "orchard-004" :name "Test Orchard Block 4"}}})
+        actor (operation/build s)
+        result (exec-op actor "t4"
+                        {:op :operate-field-equipment :orchard-id "orchard-004"}
+                        {:actor-id "orchard-ops-01" :phase :phase-3})]
+    (println "Disposition:" (:disposition (:state result))
+             "Audit:" (:audit (:state result)))
+    (println "Ledger:" (store/ledger s)))
+
+  (scenario "HARD-block: unregistered orchard block")
+  (let [s (store/mem-store)
+        actor (operation/build s)
+        result (exec-op actor "t5"
+                        {:op :schedule-field-operation :orchard-id "orchard-999"}
+                        {:actor-id "orchard-ops-01" :phase :phase-3})]
+    (println "Disposition:" (:disposition (:state result))
+             "Audit:" (:audit (:state result)))
+    (println "Ledger:" (store/ledger s)))
+
+  (println "\n" "=" "=" "=" "=" "=" "=" "=" "=" "=" "=")
+  (println "Demo completed successfully")
+  (println "=" "=" "=" "=" "=" "=" "=" "=" "=" "="))
 
 (defn -main
   "clojure -M:run entrypoint."
