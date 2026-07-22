@@ -14,16 +14,25 @@ transparency over decisions.
 **Maturity: `:implemented`.** `src/orchardops/` implements the
 `OrchardOpsAdvisor` (`orchardops.advisor`) and the independent
 `OrchardOperationsGovernor` (`orchardops.governor`), composed by
-`orchardops.operation` following the itonami actor pattern
-(ADR-2607011000): `advise -> govern -> phase-gate -> commit | escalate |
-hold`. See [Testing](#testing) below for the current green test count
-(`clojure -M:test`).
+`orchardops.operation` into a REAL compiled `langgraph-clj` `StateGraph`
+following the itonami actor pattern (ADR-2607011000):
+`intake -> advise -> govern -> decide -+-> commit / request-approval ->
+commit / hold`, with `interrupt-before #{:request-approval}` +
+checkpoint-based resume for genuine human-in-the-loop escalation. See
+[Testing](#testing) below for the current green test count
+(`clojure -M:dev:test`).
 
-`orchardops.operation` is a synchronous stub of this flow (see its
-docstring) — production wiring into a `langgraph-clj` StateGraph with
-`interrupt-before`/checkpoint-based human-in-the-loop resume for escalated
-operations is deferred, mirroring `cloud-itonami-isic-0121`'s own
-`vineyardops.operation`.
+Fixed a prior deferred-stub gap (same compounding class as sibling
+cloud-itonami-isic-* actors before their own fixes): `deps.edn` declared
+`io.github.kotoba-lang/langgraph` ONLY under the unused `:dev` alias's
+`:override-deps`, with an EMPTY base `:deps` map, so `langgraph.graph` was
+never actually resolvable on any real build/run/test path; `build`
+returned a bare closure over a synchronous `run-operation` and never
+called `langgraph.graph/state-graph`/`add-node`/`compile-graph`; and
+`orchardops.store` had no append-only audit ledger for a real `:commit`/
+`:hold` node to write to. `orchardops.advisor` was already a genuine
+`defprotocol Advisor` + `MockAdvisor` before this fix — it just had no
+real graph node to be called from.
 
 ## What this does NOT do
 
@@ -116,8 +125,10 @@ Mirrors `cloud-itonami-isic-0121` (`vineyardops.*`) module-for-module:
 - `orchardops.advisor` — `Advisor` protocol + `MockAdvisor` (the sealed LLM/decision node)
 - `orchardops.governor` — `OrchardOperationsGovernor`: hard invariants + escalation gates
 - `orchardops.phase` — 0→3 rollout phase gate
-- `orchardops.operation` — composes advisor → governor → phase into one operation run
-- `orchardops.sim` — demo runner (`clojure -M:run`)
+- `orchardops.operation` — compiles the real `langgraph-clj` `StateGraph`
+  (`intake -> advise -> govern -> decide -> commit/request-approval/hold`)
+  binding advisor, governor, phase gate, and store's audit ledger together
+- `orchardops.sim` — demo runner (`clojure -M:run` / `clojure -M:dev:run`)
 
 ## Capability layer
 
@@ -135,9 +146,9 @@ See [`docs/business-model.md`](docs/business-model.md) and
 ## Testing
 
 ```bash
-clojure -M:test   # run the suite (see raw output for tests/assertions)
-clojure -M:lint   # clj-kondo, 0 errors / 0 warnings
-clojure -M:run    # demo runner
+clojure -M:dev:test   # run the suite (langgraph resolved via local sibling checkout)
+clojure -M:lint       # clj-kondo, 0 errors / 0 warnings
+clojure -M:dev:run    # demo runner -- drives the compiled StateGraph end-to-end
 ```
 
 ## License

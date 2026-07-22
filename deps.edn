@@ -11,17 +11,28 @@
  ;; an external lib. This repo is standalone (forkable outside the
  ;; workspace); the :local/root paths only resolve inside the monorepo
  ;; checkout -- a standalone fork should override them with git
- ;; coordinates. For testing/CI without langgraph, use the core logic in
- ;; run-operation; production deployment requires the langgraph StateGraph
- ;; integration.
- :deps {}
+ ;; coordinates (see the deps.edn of an already-fixed sibling, e.g.
+ ;; cloud-itonami-isic-869 / cloud-itonami-isic-1074, which pin langgraph
+ ;; via :git/sha for exactly this reason).
+ ;;
+ ;; PRIOR BUG (fixed here, same compounding class as sibling actors): this
+ ;; dependency previously existed ONLY under the `:dev` alias's
+ ;; `:override-deps`, with the base `:deps` map EMPTY. `:override-deps`
+ ;; only overrides a coordinate for a library ALREADY present somewhere in
+ ;; the resolved dependency graph -- with no base `:deps` entry for
+ ;; `io.github.kotoba-lang/langgraph` there was nothing to override, so
+ ;; `langgraph.graph` was never actually resolvable on ANY alias
+ ;; combination, including the ones this file itself declares as the
+ ;; run/test path (`:run`, `:test`, `:dev:test`). That is the direct cause
+ ;; of `orchardops.operation`'s own docstring admitting "langgraph-clj
+ ;; StateGraph integration is deferred ... Stub".
+ :deps {io.github.kotoba-lang/langgraph
+        {:local/root "../../kotoba-lang/langgraph"}}
  :aliases
  {;; offline workspace dev -- pin transitive langchain to local checkout
   :dev {:override-deps
         {io.github.kotoba-lang/langchain
-         {:local/root "../../kotoba-lang/langchain"}
-        io.github.kotoba-lang/langgraph
-        {:local/root "../../kotoba-lang/langgraph"}}}
+         {:local/root "../../kotoba-lang/langchain"}}}
   ;; clojure -M:dev:run  -> drive the demo through one OperationActor
   :run {:main-opts ["-m" "orchardops.sim"]}
   :test {:extra-paths ["test"]

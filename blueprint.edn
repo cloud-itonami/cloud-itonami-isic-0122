@@ -9,4 +9,42 @@
  :itonami.blueprint/required-technologies [:robotics :identity :forms :audit-ledger]
  :itonami.blueprint/optional-technologies [:telemetry :optimization :dmn :bpmn]
  :itonami.blueprint/status :public-oss
- :itonami.blueprint/maturity :implemented}
+ :itonami.blueprint/maturity :implemented
+ :itonami.blueprint/implemented-slice
+ "OrchardOpsAdvisor ⊣ OrchardOperationsGovernor, langgraph-clj StateGraph
+ (langgraph.graph, orchardops.operation/build), append-only audit ledger
+ (orchardops.store/ledger + append-ledger!, MemStore). Fixes a prior
+ deferred-stub gap (same compounding class as other cloud-itonami-isic-*
+ siblings before their own fixes): `deps.edn` declared
+ `io.github.kotoba-lang/langgraph` ONLY under the unused `:dev` alias's
+ `:override-deps` with an EMPTY base `:deps` map (override-deps has
+ nothing to override when the lib was never in the graph, so
+ `langgraph.graph` was never actually resolvable on any real build/run/
+ test path); `orchardops.operation`'s own docstring admitted \"NOTE:
+ langgraph-clj StateGraph integration is deferred ... Stub\" and `build`
+ returned a bare closure over a synchronous `run-operation`, never
+ calling `state-graph`/`add-node`/`compile-graph`; and `orchardops.store`
+ had no append-only ledger at all for a real commit/hold path to write
+ to. `orchardops.advisor` was ALREADY a genuine `defprotocol Advisor` +
+ `MockAdvisor` before this fix (unlike most sibling actors' dead
+ advisor.cljc stubs) -- it just had no real graph node calling it. Now: a
+ genuinely compiled StateGraph (`:intake -> :advise -> :govern -> :decide
+ -+-> :commit / :request-approval -> :commit / :hold`) with
+ `interrupt-before #{:request-approval}` + in-memory checkpointer for real
+ human-in-the-loop resume, folding the UNCHANGED `orchardops.phase` 0->3
+ rollout gate into `:decide` exactly as the old synchronous flow
+ sequenced it. Four closed-allowlist ops (`:log-orchard-record` /
+ `:schedule-field-operation` / `:flag-crop-health-concern` /
+ `:order-supplies`), all `:effect :propose` only.
+ `:flag-crop-health-concern` (Governor always-escalate) and any
+ phase-0/phase-1-forced escalation ALWAYS route to a human grower/orchard-
+ manager/agronomist via the compiled graph's `:request-approval` node
+ (checkpoint-based resume), proven end-to-end by
+ `test/orchardops/operation_graph_test.cljc` exercising commit / hard-hold
+ (unregistered orchard, and a HARD violation that pre-empts what would
+ otherwise be an always-escalate op) / phase-0-forced-escalate-approve /
+ always-escalate-approve / always-escalate-reject / permanent field-
+ equipment block / op-not-allowed block through the REAL compiled graph,
+ including a falsifiable proof that a custom injected Advisor's own
+ (randomly generated, non-hardcoded) proposal `:summary` is what lands in
+ the committed ledger fact -- not a graph-internal literal."}

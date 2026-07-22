@@ -1,0 +1,234 @@
+(ns orchardops.operation-graph-test
+  "Integration tests for `orchardops.operation/build` -- builds the REAL
+  compiled `langgraph.graph` StateGraph and runs it end-to-end via
+  `langgraph.graph/run*` through commit / hard-hold / phase-gated-
+  escalate-approve / escalate-reject routes. These did not exist before:
+  `build` returned a bare closure over a synchronous `run-operation`, and
+  `orchardops.store` had no audit ledger at all for a real `:commit`/
+  `:hold` node to write to.
+
+  Falsifiable claims each test proves, not just asserts:
+    1. the ledger is verified EMPTY before the run (never pre-populated
+       by test fixtures), so a post-run non-empty ledger is genuinely
+       caused by this run's own `:commit`/`:hold` node, not residue;
+    2. a HARD governor violation blocks the graph from EVER reaching
+       `:commit` -- proven for `:flag-crop-health-concern`, an op that
+       would otherwise always escalate to human approval, showing the
+       hard-hold check runs and wins BEFORE the escalate branch;
+    3. the phase gate (`orchardops.phase`, unchanged pure logic) is
+       genuinely folded into the compiled graph's `:decide` node -- a
+       phase-0 context forces even a Governor-clean, non-always-escalate
+       proposal to interrupt at `:request-approval` rather than
+       auto-committing;
+    4. the Advisor's proposal is genuinely threaded through
+       `:advise -> :govern -> :decide -> :commit` -- proven by injecting
+       a custom `Advisor` (via `build`'s `:advisor` opt) whose proposal
+       carries a random, single-use `:summary` string generated at test
+       run time (impossible to have been hardcoded anywhere in
+       `orchardops.operation`) and asserting the committed ledger fact
+       carries that EXACT string."
+  (:require [clojure.test :refer [deftest is testing]]
+            [langgraph.graph :as g]
+            [orchardops.advisor :as advisor]
+            [orchardops.operation :as operation]
+            [orchardops.store :as store]))
+
+(def ^:private grower {:actor-id "orchard-ops-01" :role :orchard-operator})
+
+(defn- exec
+  ([actor tid request] (exec actor tid request (assoc grower :phase :phase-2)))
+  ([actor tid request context]
+   (g/run* actor {:request request :context context} {:thread-id tid})))
+
+(deftest commit-path-clean-non-always-escalate-proposal
+  (testing "a clean, non-always-escalate (:schedule-field-operation) proposal,
+            in phase-2 (reduced supervision -- Governor's verdict is
+            authoritative for non-always-escalate ops), commits through the
+            REAL compiled graph and appends exactly one fact to the audit
+            ledger -- the ledger is verified EMPTY beforehand, proving the
+            write is a genuine effect of THIS run, not test-setup residue"
+    (let [s (store/mem-store {:initial-orchards
+                              {"orchard-001" {:id "orchard-001" :name "Block 1"}}})
+          actor (operation/build s)]
+      (is (empty? (store/ledger s)) "ledger is empty before any run")
+      (let [result (exec actor "t-commit"
+                         {:op :schedule-field-operation :orchard-id "orchard-001"
+                          :operation-type "pruning"})
+            state (:state result)]
+        (is (= :done (:status result)))
+        (is (= :commit (:disposition state)))
+        (let [ledger (store/ledger s)]
+          (is (= 1 (count ledger)))
+          (is (= :committed (:t (first ledger))))
+          (is (= :schedule-field-operation (:op (first ledger))))
+          (is (= "orchard-001" (:subject (first ledger)))))))))
+
+(deftest hard-hold-path-orchard-not-registered
+  (testing "a proposal against an orchard-id that was NEVER registered is a
+            HARD governor violation -- the real graph routes straight to
+            :hold (no interrupt, no human-approval detour) and durably
+            records the hold fact"
+    (let [s (store/mem-store)
+          actor (operation/build s)]
+      (is (empty? (store/ledger s)))
+      (let [result (exec actor "t-hold"
+                         {:op :log-orchard-record :orchard-id "orchard-999"
+                          :count 100})
+            state (:state result)]
+        (is (= :done (:status result)))
+        (is (= :hold (:disposition state)))
+        (let [ledger (store/ledger s)]
+          (is (= 1 (count ledger)))
+          (is (= :governor-hold (:t (first ledger))))
+          (is (some #{:orchard-not-registered} (map :rule (:violations (first ledger))))))))))
+
+(deftest governor-hard-hold-blocks-ledger-write-before-escalation
+  (testing "a HARD governor violation (orchard-not-registered) is caught
+            BEFORE the graph would otherwise have escalated for human
+            approval -- :flag-crop-health-concern is normally ALWAYS-escalate,
+            so a plain '(:hold disposition)' assertion alone wouldn't
+            distinguish hard-block from an unresolved escalation. This test
+            proves the ledger contains ONLY a :governor-hold fact citing the
+            actual violated rule -- never an :approval-requested-only outcome
+            -- for an op that WOULD have interrupted for approval had it been
+            governor-clean"
+    (let [s (store/mem-store)
+          actor (operation/build s)
+          result (exec actor "t-govhold"
+                       {:op :flag-crop-health-concern :orchard-id "orchard-ghost"
+                        :concern "possible fruit-fly infestation"})]
+      (is (= :done (:status result)) "no interrupt -- HARD holds never pause for approval")
+      (is (= :hold (:disposition (:state result))))
+      (let [ledger (store/ledger s)]
+        (is (= 1 (count ledger)))
+        (is (every? #(= :governor-hold (:t %)) ledger)
+            "no :approval-requested-only outcome -- the governor hold blocked
+            the graph before the always-escalate branch could run")
+        (is (some #{:orchard-not-registered} (map :rule (:violations (first ledger)))))))))
+
+(deftest phase-0-forces-escalate-on-otherwise-clean-commit
+  (testing "the phase gate (`orchardops.phase`, unchanged pure logic) is
+            genuinely folded into the compiled graph's :decide node: a
+            Governor-clean, non-always-escalate proposal (:schedule-
+            field-operation) that would auto-commit in phase-2/phase-3
+            instead GENUINELY interrupts at :request-approval under a
+            phase-0 context, and the ledger stays EMPTY until a human
+            resumes it -- proving the phase gate, not just the Governor,
+            drives this graph's routing"
+    (let [s (store/mem-store {:initial-orchards
+                              {"orchard-001" {:id "orchard-001" :name "Block 1"}}})
+          actor (operation/build s)]
+      (is (empty? (store/ledger s)))
+      (let [held (exec actor "t-phase0"
+                       {:op :schedule-field-operation :orchard-id "orchard-001"}
+                       (assoc grower :phase :phase-0))]
+        (is (= :interrupted (:status held)))
+        (is (= [:request-approval] (:frontier held)))
+        (is (empty? (store/ledger s)) "not yet committed -- awaiting human sign-off")
+        (let [approved (g/run* actor {:approval {:status :approved :by "grower-01"}}
+                               {:thread-id "t-phase0" :resume? true})]
+          (is (= :done (:status approved)))
+          (is (= :commit (:disposition (:state approved))))
+          (let [ledger (store/ledger s)]
+            (is (= 1 (count ledger)))
+            (is (= :committed (:t (first ledger))))))))))
+
+(deftest escalate-then-approve-commits-and-genuinely-consults-advisor
+  (testing ":flag-crop-health-concern ALWAYS escalates (Governor
+            always-escalate-op, independent of phase) -- the real graph
+            GENUINELY interrupts (checkpointed) at :request-approval, and
+            the ledger stays EMPTY until a human grower/agronomist resumes
+            it. A custom, non-default Advisor (injected at test time, NOT
+            a call-site literal in `orchardops.operation`) proposes with a
+            randomly generated, single-use `:summary` string. Only if the
+            graph truly threads the Advisor's own proposal through
+            :advise -> :govern -> :decide -> :commit (rather than
+            re-deriving/hardcoding a proposal internally) can that exact
+            string reach the ledger's committed fact."
+    (let [distinctive-summary (str "TEST-ADVISOR-" (rand-int 1000000000))
+          test-advisor (reify advisor/Advisor
+                         (-advise [_ _store request]
+                           {:op (:op request)
+                            :effect :propose
+                            :concern (:concern request)
+                            :value {:orchard-id (:orchard-id request)
+                                    :concern (:concern request)
+                                    :recommended-action "agronomist-review"}
+                            :cites ["operator-observation"]
+                            :summary distinctive-summary
+                            :confidence 0.9}))
+          s (store/mem-store {:initial-orchards
+                              {"orchard-001" {:id "orchard-001" :name "Block 1"}}})
+          actor (operation/build s {:advisor test-advisor})]
+      (is (empty? (store/ledger s)))
+      (let [held (exec actor "t-escalate"
+                       {:op :flag-crop-health-concern :orchard-id "orchard-001"
+                        :concern "suspected fungal disease"}
+                       (assoc grower :phase :phase-3))]
+        (is (= :interrupted (:status held)))
+        (is (= [:request-approval] (:frontier held)))
+        (is (empty? (store/ledger s)) "not yet committed -- awaiting human sign-off")
+        (let [approved (g/run* actor {:approval {:status :approved :by "agronomist-01"}}
+                               {:thread-id "t-escalate" :resume? true})
+              approved-state (:state approved)]
+          (is (= :done (:status approved)))
+          (is (= :commit (:disposition approved-state)))
+          (let [ledger (store/ledger s)]
+            (is (= 1 (count ledger)))
+            (is (= :committed (:t (first ledger))))
+            (is (= distinctive-summary (:summary (first ledger)))
+                "the ledger's committed fact carries the INJECTED test
+                Advisor's own distinctive summary -- proof the graph
+                genuinely threads the Advisor's real proposal through
+                :govern -> :decide -> :commit rather than hardcoding a
+                pass-string or ignoring the Advisor node's output")))))))
+
+(deftest escalate-then-reject-holds
+  (testing "a human agronomist rejecting an escalated
+            :flag-crop-health-concern routes to :hold via the
+            :request-approval node's own decision, and durably records
+            the rejection -- not a hand-rolled parallel path"
+    (let [s (store/mem-store {:initial-orchards
+                              {"orchard-001" {:id "orchard-001" :name "Block 1"}}})
+          actor (operation/build s)
+          _held (exec actor "t-reject"
+                      {:op :flag-crop-health-concern :orchard-id "orchard-001"
+                       :concern "possible frost damage"}
+                      (assoc grower :phase :phase-3))
+          rejected (g/run* actor {:approval {:status :rejected :by "agronomist-01"}}
+                           {:thread-id "t-reject" :resume? true})
+          rejected-state (:state rejected)]
+      (is (= :done (:status rejected)))
+      (is (= :hold (:disposition rejected-state)))
+      (let [ledger (store/ledger s)]
+        (is (= 1 (count ledger)))
+        (is (= :approval-rejected (:t (first ledger))))))))
+
+(deftest hard-hold-op-not-allowed-through-compiled-graph
+  (testing "an op entirely outside the closed allowlist (not merely
+            blocked -- unrecognized) is a HARD, permanent block, proven
+            end-to-end through the compiled graph"
+    (let [s (store/mem-store {:initial-orchards
+                              {"orchard-001" {:id "orchard-001" :name "Block 1"}}})
+          actor (operation/build s)
+          result (exec actor "t-notallowed"
+                       {:op :dispatch-robot-arm :orchard-id "orchard-001"})]
+      (is (= :hold (:disposition (:state result))))
+      (let [ledger (store/ledger s)]
+        (is (= 1 (count ledger)))
+        (is (some #{:op-not-allowed} (map :rule (:violations (first ledger)))))))))
+
+(deftest hard-block-field-equipment-permanently-blocked-through-compiled-graph
+  (testing "direct field-equipment operation is a permanent block
+            regardless of phase (phase-3 = full autonomy, still hard-held),
+            proven end-to-end through the compiled graph"
+    (let [s (store/mem-store {:initial-orchards
+                              {"orchard-001" {:id "orchard-001" :name "Block 1"}}})
+          actor (operation/build s)
+          result (exec actor "t-fieldequip"
+                       {:op :operate-field-equipment :orchard-id "orchard-001"}
+                       (assoc grower :phase :phase-3))]
+      (is (= :hold (:disposition (:state result))))
+      (let [ledger (store/ledger s)]
+        (is (= 1 (count ledger)))
+        (is (some #{:field-equipment-or-spray-blocked} (map :rule (:violations (first ledger)))))))))
