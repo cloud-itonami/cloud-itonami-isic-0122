@@ -1,4 +1,4 @@
-{:itonami.blueprint/id "cloud-itonami-0122"
+{:itonami.blueprint/id "cloud-itonami-isic-0122"
  :itonami.blueprint/name "Orchard Operations Coordination"
  :itonami.blueprint/isic-rev5 "0122"
  :itonami.blueprint/domain :agriculture/tropical-subtropical-fruit-growing
