@@ -1,0 +1,49 @@
+<html><head><meta charset="utf-8"><title>cloud-itonami-isic-0122 &middot; orchard ops</title><style>body{font:14px/1.5 -apple-system,system-ui,sans-serif;margin:0;color:#1a1a1a;background:#f5f5f5}.bar{background:#2a1a0a;color:#fff;padding:1.2rem 2rem}.bar h1{margin:0;font-size:1.15rem;font-weight:600}.badge{display:inline-block;margin-top:.4rem;font-size:.75rem;opacity:.8}main{max-width:980px;margin:1.5rem auto;padding:0 1rem}.card{background:#fff;border-radius:8px;padding:1.2rem 1.4rem;margin-bottom:1.2rem;box-shadow:0 1px 3px rgba(0,0,0,.08)}.card h2{margin-top:0;font-size:1rem}.muted{color:#777;font-size:.82rem}table{border-collapse:collapse;width:100%;font-size:.85rem}th,td{text-align:left;padding:.42rem .5rem;border-bottom:1px solid #eee}th{font-weight:600;color:#555}.ok{color:#0a7d33}.warn{color:#9a6700}.critical{color:#b41010;font-weight:600}code{background:#f0f0f0;padding:.1rem .3rem;border-radius:3px;font-size:.8rem}</style></head><body>
+<header class="bar">
+  <h1>Orchard ops (ISIC 0122) — Operator Console</h1>
+  <span class="badge">read-only sample · governor-gated · equipment control permanently out of scope · unregistered blocks HARD-blocked</span>
+</header>
+<main>
+  <section class="card">
+    <h2>Scenario orchard blocks</h2>
+    <p class="muted">Demo snapshot — build-time-generated from <code>orchardops.store</code> via <code>orchardops.render-html</code> (<code>clojure -M:dev:render-html</code>), regenerated nightly. No invented data.</p>
+    <table>
+      <thead><tr><th>Orchard</th><th>Name</th><th>Fruit class</th><th>Last op status</th></tr></thead>
+      <tbody>
+        <tr><td>orchard-001</td><td>Test Orchard Block</td><td>mango</td><td><span class="ok">committed</span></td></tr>
+        <tr><td>orchard-002</td><td>Test Orchard Block 2</td><td>banana</td><td><span class="ok">committed</span></td></tr>
+        <tr><td>orchard-003</td><td>Test Orchard Block 3</td><td>avocado</td><td><span class="critical">rejected (hold)</span></td></tr>
+        <tr><td>orchard-004</td><td>Test Orchard Block 4</td><td>—</td><td><span class="critical">HARD hold &middot; field-equipment-or-spray-blocked</span></td></tr>
+        <tr><td>orchard-999</td><td>(unregistered)</td><td>—</td><td><span class="critical">HARD hold &middot; orchard-not-registered</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Action gate (OrchardOps Governor)</h2>
+    <p class="muted">HARD blocks cannot be overridden. Field-equipment control is never coordinated; unregistered orchards are rejected before any human.</p>
+    <table>
+      <thead><tr><th>Op</th><th>Gate</th></tr></thead>
+      <tbody>
+        <tr><td><code>:log-orchard-record</code></td><td><span class="ok">auto-commit at phase-1+ when clean + registered</span></td></tr>
+        <tr><td><code>:flag-crop-health-concern</code></td><td><span class="warn">ALWAYS human approval (crop safety)</span></td></tr>
+        <tr><td><code>:operate-field-equipment</code></td><td><span class="critical">HARD out-of-allowlist (equipment control is never coordinated)</span></td></tr>
+        <tr><td><code>:schedule-field-operation</code></td><td><span class="warn">registered-orchard required; else HARD block</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Audit ledger (this run)</h2>
+    <p class="muted">Append-only decision-fact log — every proposal, hold and commit this scenario produced.</p>
+    <table>
+      <thead><tr><th>Fact</th><th>Op</th><th>Subject</th><th>Basis</th></tr></thead>
+      <tbody>
+        <tr><td>committed</td><td><code>log-orchard-record</code></td><td>orchard-001</td><td>operator-submitted-record</td></tr>
+        <tr><td>committed</td><td><code>log-orchard-record</code></td><td>orchard-002</td><td>operator-submitted-record</td></tr>
+        <tr><td>approval-rejected</td><td><code>flag-crop-health-concern</code></td><td>orchard-003</td><td>approver-rejected</td></tr>
+        <tr><td>governor-hold</td><td><code>operate-field-equipment</code></td><td>orchard-004</td><td>field-equipment-or-spray-blocked</td></tr>
+        <tr><td>governor-hold</td><td><code>schedule-field-operation</code></td><td>orchard-999</td><td>orchard-not-registered</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+</body></html>
