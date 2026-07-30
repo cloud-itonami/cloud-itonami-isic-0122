@@ -1,0 +1,133 @@
+(ns orchardops.render-html
+  "Build-time HTML renderer for `docs/samples/operator-console.html`.
+
+  Closes flagship checklist item 2 (com-junkawasaki/root ADR-2607189300,
+  Wave5). Drives the REAL actor stack (`orchardops.operation` ->
+  `orchardops.governor` -> `orchardops.store`) through a scenario adapted
+  from this repo's own `orchardops.sim` demo driver (whose per-scenario
+  runs are combined here into one seeded store), rendered deterministically
+  -- no invented numbers/ids/ops (the template's #1 discipline).
+
+  Usage: `clojure -M:dev:render-html [out-file]`
+  (default `docs/samples/operator-console.html`)."
+  (:require [clojure.string :as str]
+            [orchardops.store :as store]
+            [orchardops.operation :as op]
+            [langgraph.graph :as g]))
+
+;; Per-call context (this variant's sim passes phase per-request, unlike the
+;; crop-family repos' single fixed operator map).
+(defn- exec! [actor tid request ctx]
+  (g/run* actor {:request request :context ctx} {:thread-id tid}))
+(defn- approve! [actor tid by]
+  (g/run* actor {:approval {:status :approved :by by}} {:thread-id tid :resume? true}))
+(defn- reject! [actor tid by]
+  (g/run* actor {:approval {:status :rejected :by by}} {:thread-id tid :resume? true}))
+
+(def ^:private op-ctx #(hash-map :actor-id "orchard-ops-01" :role :orchard-operator :phase %))
+(def ^:private op-ctx-bare #(hash-map :actor-id "orchard-ops-01" :phase %))
+
+(defn run-demo!
+  "Seeds four orchard blocks plus references an unregistered one, then runs
+  every disposition this actor can reach: a clean harvest-record on
+  orchard-001 (phase-1 auto-commit), a phase-0 planting that phase-gates to
+  escalation (operator approves), a crop-health concern on orchard-003
+  (always escalates -- agronomist REJECTS), an out-of-allowlist equipment
+  operation on orchard-004 (HARD block), and a schedule against the
+  unregistered orchard-999 (HARD block). Every id/op/value is from
+  orchardops.sim / orchardops.governor / orchardops.store -- no invented."
+  []
+  (let [db (store/mem-store
+            {:initial-orchards
+             {"orchard-001" {:id "orchard-001" :name "Test Orchard Block"   :fruit-class "mango"}
+              "orchard-002" {:id "orchard-002" :name "Test Orchard Block 2" :fruit-class "banana"}
+              "orchard-003" {:id "orchard-003" :name "Test Orchard Block 3" :fruit-class "avocado"}
+              "orchard-004" {:id "orchard-004" :name "Test Orchard Block 4"}}})
+        actor (op/build db)]
+    (exec! actor "t1" {:op :log-orchard-record :orchard-id "orchard-001"
+                       :record-type "harvest" :count 500 :notes "healthy yield"} (op-ctx :phase-1))
+    (exec! actor "t2" {:op :log-orchard-record :orchard-id "orchard-002"
+                       :record-type "planting" :count 200} (op-ctx :phase-0))
+    (approve! actor "t2" "grower-01")
+    (exec! actor "t3" {:op :flag-crop-health-concern :orchard-id "orchard-003"
+                       :concern "suspected fungal disease"} (op-ctx :phase-3))
+    (reject! actor "t3" "agronomist-01")
+    (exec! actor "t4" {:op :operate-field-equipment :orchard-id "orchard-004"} (op-ctx-bare :phase-3))
+    (exec! actor "t5" {:op :schedule-field-operation :orchard-id "orchard-999"} (op-ctx-bare :phase-3))
+    db))
+
+;; ----------------------------- rendering -----------------------------
+
+(defn- esc [v]
+  (-> (str v) (str/replace "&" "&amp;") (str/replace "<" "&lt;") (str/replace ">" "&gt;")))
+
+(defn- last-fact-for [ledger orchard-id]
+  (last (filter #(= (:subject %) orchard-id) ledger)))
+
+(defn- status-cell [ledger orchard-id]
+  (let [f (last-fact-for ledger orchard-id)]
+    (cond
+      (nil? f) "<span class=\"muted\">no activity</span>"
+      (= :committed (:t f)) "<span class=\"ok\">committed</span>"
+      (= :approval-granted (:t f)) "<span class=\"ok\">approved &amp; committed</span>"
+      (= :approval-rejected (:t f)) "<span class=\"critical\">rejected (hold)</span>"
+      (= :governor-hold (:t f))
+      (let [rule (-> f :basis first)]
+        (str "<span class=\"critical\">HARD hold &middot; " (esc (name (or rule :unknown))) "</span>"))
+      (= :approval-requested (:t f)) "<span class=\"warn\">awaiting approval</span>"
+      :else "<span class=\"muted\">in progress</span>")))
+
+(defn- ledger-row [{:keys [t op subject disposition basis by]}]
+  (format "        <tr><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td></tr>"
+          (esc (name t)) (esc (name (or op :n-a))) (esc subject)
+          (esc (or (some->> basis (map name) (str/join ", ")) (some-> disposition name) ""))))
+
+(def ^:private action-gate-rows
+  ["        <tr><td><code>:log-orchard-record</code></td><td><span class=\"ok\">auto-commit at phase-1+ when clean + registered</span></td></tr>"
+   "        <tr><td><code>:flag-crop-health-concern</code></td><td><span class=\"warn\">ALWAYS human approval (crop safety)</span></td></tr>"
+   "        <tr><td><code>:operate-field-equipment</code></td><td><span class=\"critical\">HARD out-of-allowlist (equipment control is never coordinated)</span></td></tr>"
+   "        <tr><td><code>:schedule-field-operation</code></td><td><span class=\"warn\">registered-orchard required; else HARD block</span></td></tr>"])
+
+(defn render [db]
+  (let [ledger (vec (store/ledger db))
+        orchard-ids ["orchard-001" "orchard-002" "orchard-003" "orchard-004" "orchard-999"]
+        orchard-row (fn [oid]
+                      (let [o (store/registered-orchard db oid)]
+                        (format "        <tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+                                (esc oid) (esc (or (:name o) "(unregistered)"))
+                                (esc (or (:fruit-class o) "—")) (status-cell ledger oid))))
+        orchard-rows (str/join "\n" (map orchard-row orchard-ids))
+        ledger-rows (str/join "\n" (map ledger-row ledger))]
+    (str
+     "<html><head><meta charset=\"utf-8\"><title>cloud-itonami-isic-0122 &middot; orchard ops</title><style>"
+     "body{font:14px/1.5 -apple-system,system-ui,sans-serif;margin:0;color:#1a1a1a;background:#f5f5f5}"
+     ".bar{background:#2a1a0a;color:#fff;padding:1.2rem 2rem}.bar h1{margin:0;font-size:1.15rem;font-weight:600}"
+     ".badge{display:inline-block;margin-top:.4rem;font-size:.75rem;opacity:.8}"
+     "main{max-width:980px;margin:1.5rem auto;padding:0 1rem}"
+     ".card{background:#fff;border-radius:8px;padding:1.2rem 1.4rem;margin-bottom:1.2rem;box-shadow:0 1px 3px rgba(0,0,0,.08)}"
+     ".card h2{margin-top:0;font-size:1rem}.muted{color:#777;font-size:.82rem}"
+     "table{border-collapse:collapse;width:100%;font-size:.85rem}th,td{text-align:left;padding:.42rem .5rem;border-bottom:1px solid #eee}th{font-weight:600;color:#555}"
+     ".ok{color:#0a7d33}.warn{color:#9a6700}.critical{color:#b41010;font-weight:600}code{background:#f0f0f0;padding:.1rem .3rem;border-radius:3px;font-size:.8rem}"
+     "</style></head><body>\n"
+     "<header class=\"bar\">\n  <h1>Orchard ops (ISIC 0122) — Operator Console</h1>\n"
+     "  <span class=\"badge\">read-only sample · governor-gated · equipment control permanently out of scope · unregistered blocks HARD-blocked</span>\n</header>\n"
+     "<main>\n  <section class=\"card\">\n    <h2>Scenario orchard blocks</h2>\n"
+     "    <p class=\"muted\">Demo snapshot — build-time-generated from <code>orchardops.store</code> via <code>orchardops.render-html</code> (<code>clojure -M:dev:render-html</code>), regenerated nightly. No invented data.</p>\n"
+     "    <table>\n      <thead><tr><th>Orchard</th><th>Name</th><th>Fruit class</th><th>Last op status</th></tr></thead>\n      <tbody>\n"
+     orchard-rows "\n      </tbody>\n    </table>\n  </section>\n"
+     "  <section class=\"card\">\n    <h2>Action gate (OrchardOps Governor)</h2>\n"
+     "    <p class=\"muted\">HARD blocks cannot be overridden. Field-equipment control is never coordinated; unregistered orchards are rejected before any human.</p>\n"
+     "    <table>\n      <thead><tr><th>Op</th><th>Gate</th></tr></thead>\n      <tbody>\n"
+     (str/join "\n" action-gate-rows) "\n      </tbody>\n    </table>\n  </section>\n"
+     "  <section class=\"card\">\n    <h2>Audit ledger (this run)</h2>\n"
+     "    <p class=\"muted\">Append-only decision-fact log — every proposal, hold and commit this scenario produced.</p>\n"
+     "    <table>\n      <thead><tr><th>Fact</th><th>Op</th><th>Subject</th><th>Basis</th></tr></thead>\n      <tbody>\n"
+     ledger-rows "\n      </tbody>\n    </table>\n  </section>\n"
+     "</main>\n</body></html>\n")))
+
+(defn -main [& args]
+  (let [out (or (first args) "docs/samples/operator-console.html")
+        db (run-demo!) out-file (java.io.File. out)]
+    (.. out-file getParentFile mkdirs)
+    (spit out-file (render db))
+    (println "wrote" out "(" (count (store/ledger db)) "ledger facts )")))
