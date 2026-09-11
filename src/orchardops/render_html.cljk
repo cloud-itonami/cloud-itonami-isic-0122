@@ -8,7 +8,7 @@
   runs are combined here into one seeded store), rendered deterministically
   -- no invented numbers/ids/ops (the template's #1 discipline).
 
-  Usage: `clojure -M:dev:render-html [out-file]`
+  Usage: `kbb -M:dev:render-html [out-file]`
   (default `docs/samples/operator-console.html`)."
   (:require [kotoba.lang.text :as str]
             [orchardops.store :as store]
@@ -112,7 +112,7 @@
      "<header class=\"bar\">\n  <h1>Orchard ops (ISIC 0122) — Operator Console</h1>\n"
      "  <span class=\"badge\">read-only sample · governor-gated · equipment control permanently out of scope · unregistered blocks HARD-blocked</span>\n</header>\n"
      "<main>\n  <section class=\"card\">\n    <h2>Scenario orchard blocks</h2>\n"
-     "    <p class=\"muted\">Demo snapshot — build-time-generated from <code>orchardops.store</code> via <code>orchardops.render-html</code> (<code>clojure -M:dev:render-html</code>), regenerated nightly. No invented data.</p>\n"
+     "    <p class=\"muted\">Demo snapshot — build-time-generated from <code>orchardops.store</code> via <code>orchardops.render-html</code> (<code>kbb -M:dev:render-html</code>), regenerated nightly. No invented data.</p>\n"
      "    <table>\n      <thead><tr><th>Orchard</th><th>Name</th><th>Fruit class</th><th>Last op status</th></tr></thead>\n      <tbody>\n"
      orchard-rows "\n      </tbody>\n    </table>\n  </section>\n"
      "  <section class=\"card\">\n    <h2>Action gate (OrchardOps Governor)</h2>\n"
