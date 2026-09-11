@@ -38,9 +38,9 @@
   :dev {:override-deps
         {io.github.kotoba-lang/langchain
          {:local/root "../../kotoba-lang/langchain"}}}
-  ;; clojure -M:dev:run  -> drive the demo through one OperationActor
+  ;; kbb -M:dev:run  -> drive the demo through one OperationActor
   :run {:main-opts ["-m" "orchardops.sim"]}
-  ;; clojure -M:dev:render-html -> regenerate docs/samples/operator-console.html (flagship item 2, ADR-2607189300 Wave5).
+  ;; kbb -M:dev:render-html -> regenerate docs/samples/operator-console.html (flagship item 2, ADR-2607189300 Wave5).
   :render-html {:main-opts ["-m" "orchardops.render-html"]}
   :test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner

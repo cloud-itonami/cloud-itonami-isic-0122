@@ -20,7 +20,7 @@ following the itonami actor pattern (ADR-2607011000):
 commit / hold`, with `interrupt-before #{:request-approval}` +
 checkpoint-based resume for genuine human-in-the-loop escalation. See
 [Testing](#testing) below for the current green test count
-(`clojure -M:dev:test`).
+(`kbb -M:dev:test`).
 
 Fixed a prior deferred-stub gap (same compounding class as sibling
 cloud-itonami-isic-* actors before their own fixes): `deps.edn` declared
@@ -128,7 +128,7 @@ Mirrors `cloud-itonami-isic-0121` (`vineyardops.*`) module-for-module:
 - `orchardops.operation` — compiles the real `langgraph-clj` `StateGraph`
   (`intake -> advise -> govern -> decide -> commit/request-approval/hold`)
   binding advisor, governor, phase gate, and store's audit ledger together
-- `orchardops.sim` — demo runner (`clojure -M:run` / `clojure -M:dev:run`)
+- `orchardops.sim` — demo runner (`kbb -M:run` / `kbb -M:dev:run`)
 
 ## Capability layer
 
@@ -146,9 +146,9 @@ See [`docs/business-model.md`](docs/business-model.md) and
 ## Testing
 
 ```bash
-clojure -M:dev:test   # run the suite (langgraph resolved via local sibling checkout)
-clojure -M:lint       # clj-kondo, 0 errors / 0 warnings
-clojure -M:dev:run    # demo runner -- drives the compiled StateGraph end-to-end
+kbb -M:dev:test   # run the suite (langgraph resolved via local sibling checkout)
+kbb -M:lint       # clj-kondo, 0 errors / 0 warnings
+kbb -M:dev:run    # demo runner -- drives the compiled StateGraph end-to-end
 ```
 
 ## License
