@@ -76,7 +76,7 @@ the phase gate or Governor escalates. A human operator resumes it with
 
 (`:status :rejected` routes to `:hold` instead). Nothing is committed to
 the store or the ledger until this resume call runs — the ledger stays
-empty across the interrupt (see `test/orchardops/operation_graph_test.cljc`
+empty across the interrupt (see `test/orchardops/operation_graph_test.cljk`
 for the falsifiable proof).
 
 ## Audit & Transparency
