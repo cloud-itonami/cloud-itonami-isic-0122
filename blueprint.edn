@@ -40,7 +40,7 @@
  phase-0/phase-1-forced escalation ALWAYS route to a human grower/orchard-
  manager/agronomist via the compiled graph's `:request-approval` node
  (checkpoint-based resume), proven end-to-end by
- `test/orchardops/operation_graph_test.cljc` exercising commit / hard-hold
+ `test/orchardops/operation_graph_test.cljk` exercising commit / hard-hold
  (unregistered orchard, and a HARD violation that pre-empts what would
  otherwise be an always-escalate op) / phase-0-forced-escalate-approve /
  always-escalate-approve / always-escalate-reject / permanent field-
