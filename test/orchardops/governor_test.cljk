@@ -1,5 +1,5 @@
 (ns orchardops.governor-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [orchardops.governor :as gov]
             [orchardops.store :as store]))
 
