@@ -1,0 +1,43 @@
+;; What this vertical's robot physically does, declared for
+;; kotoba.robotics.process (kotoba-lang/robotics). `kbb -M:dev:physics` runs it.
+;;
+;; README "Robotics premise": a facility-management robot keeps orchard block
+;; records, schedules field operations and handles supplies for a grower of
+;; tropical and subtropical fruits (ISIC 0122, e.g. bananas). Its physical
+;; work: lifting a cut banana bunch onto the cableway hook, hauling bunches to
+;; the packing shed, and cooling fruit without chilling it.
+;;
+;; Every number without a cited source is marked `estimate` in its :basis.
+;; Replacing an estimate with a sourced value is this bot's growth work.
+{:physics/schema "itonami.physical-ai.spec.v1"
+ :repo "cloud-itonami/cloud-itonami-isic-0122"
+ :cases
+ [{:id :banana-bunch-onto-cableway
+   :kind :manipulator
+   :procedure "arm catches a cut banana bunch at shoulder height and raises it onto the cableway hook"
+   :params {:l1-m 0.70 :l2-m 0.60 :m1-kg 10.0 :m2-kg 7.0
+            :from [0.80 0.20] :to [0.40 1.00] :duration-s 3.0 :steps 600}
+   :sweep {:param :payload-kg :values [20.0 30.0 40.0 50.0 60.0]}
+   :quantity :peak-tau1-nm
+   :limit {:max 500.0 :basis "estimate: continuous shoulder torque of a 50 kg-class heavy-payload arm"}
+   :boundary {:lo 1.0 :hi 150.0}}
+  {:id :bunches-to-packing-shed
+   :kind :transport
+   :procedure "carrier hauls a load of banana bunches from the plantation block to the packing shed"
+   :params {:mass-kg 250.0 :distance-m 400.0 :v-max-mps 1.5 :a-max-mps2 0.5
+            :brake-decel-mps2 1.0 :drive-force-n 1000.0 :crr 0.07
+            :cog-height-m 0.80 :support-half-length-m 0.55 :max-time-s 3600.0}
+   :sweep {:param :payload-kg :values [100.0 200.0 400.0 600.0 800.0]}
+   :quantity :cycle-time-s
+   :limit {:max 300.0 :basis "estimate: one haul leg so the shed is fed within its washing-tank cycle"}
+   :boundary {:lo 50.0 :hi 2000.0}}
+  {:id :fruit-cooling-above-chilling
+   :kind :thermal
+   :procedure "hands of green bananas are cooled in 13 C air for transport; the fruit centre temperature is judged against the chilling threshold"
+   :params {:thickness-m 0.018 :conductivity-w-mk 0.48 :density-kg-m3 980.0 :specific-heat-j-kgk 3350.0
+            :t0-c 30.0 :h-front-w-m2k 20.0 :t-back-ambient-c 30.0 :h-back-w-m2k 0.0
+            :threshold-c 99.0 :duration-s 21600.0 :nodes 11}
+   :sweep {:param :t-hot-c :values [8.0 10.0 12.0 13.0 14.0]}
+   :quantity :final-back-c
+   :limit {:min 13.0 :basis "estimate: bananas suffer chilling injury below about 13 C"}
+   :boundary {:lo 5.0 :hi 20.0}}]}
